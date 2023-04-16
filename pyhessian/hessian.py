@@ -34,7 +34,7 @@ class hessian():
         iii) the estimated eigenvalue density
     """
 
-    def __init__(self, model, criterion, data=None, dataloader=None, cuda=True):
+    def __init__(self, model,  data=None, dataloader=None, cuda=True):
         """
         model: the model that needs Hessain information
         criterion: the loss function
@@ -46,8 +46,8 @@ class hessian():
         assert (data != None and dataloader == None) or (data == None and
                                                          dataloader != None)
 
-        self.model = model.eval()  # make model is in evaluation model
-        self.criterion = criterion
+        self.model = model
+        self.model.network.eval()  # make model is in evaluation model
 
         if data != None:
             self.data = data
@@ -63,18 +63,17 @@ class hessian():
 
         # pre-processing for single batch case to simplify the computation.
         if not self.full_dataset:
-            self.inputs, self.targets = self.data
+            self.inputs, self.targets, self.tasks = self.data
             if self.device == 'cuda':
                 self.inputs, self.targets = self.inputs.cuda(
                 ), self.targets.cuda()
 
             # if we only compute the Hessian information for a single batch data, we can re-use the gradients.
-            outputs = self.model(self.inputs)
-            loss = self.criterion(outputs, self.targets)
+            loss, _ = self.model.loss_and_outputs(self.inputs, self.targets, self.tasks, validation=False)
             loss.backward(create_graph=True)
 
         # this step is used to extract the parameters from the model
-        params, gradsH = get_params_grad(self.model)
+        params, gradsH = get_params_grad(self.model.network)
         self.params = params
         self.gradsH = gradsH  # gradient used for Hessian computation
 
@@ -85,14 +84,13 @@ class hessian():
 
         THv = [torch.zeros(p.size()).to(device) for p in self.params
               ]  # accumulate result
-        for inputs, targets in self.data:
-            self.model.zero_grad()
+        for inputs, targets, tasks in self.data:
+            self.model.optimizer.zero_grad()
             tmp_num_data = inputs.size(0)
-            outputs = self.model(inputs.to(device))
-            loss = self.criterion(outputs, targets.to(device))
+            loss, _ = self.model.loss_and_outputs(inputs, targets, tasks, validation=False)
             loss.backward(create_graph=True)
-            params, gradsH = get_params_grad(self.model)
-            self.model.zero_grad()
+            params, gradsH = get_params_grad(self.model.network)
+            self.model.optimizer.zero_grad()
             Hv = torch.autograd.grad(gradsH,
                                      params,
                                      grad_outputs=v,
@@ -133,7 +131,7 @@ class hessian():
 
             for i in range(maxIter):
                 v = orthnormal(v, eigenvectors)
-                self.model.zero_grad()
+                self.model.optimizer.zero_grad()
 
                 if self.full_dataset:
                     tmp_eigenvalue, Hv = self.dataloader_hv_product(v)
@@ -169,7 +167,7 @@ class hessian():
         trace = 0.
 
         for i in range(maxIter):
-            self.model.zero_grad()
+            self.model.optimizer.zero_grad()
             v = [
                 torch.randint_like(p, high=2, device=device)
                 for p in self.params
@@ -218,7 +216,7 @@ class hessian():
             beta_list = []
             ############### Lanczos
             for i in range(iter):
-                self.model.zero_grad()
+                self.model.optimizer.zero_grad()
                 w_prime = [torch.zeros(p.size()).to(device) for p in self.params]
                 if i == 0:
                     if self.full_dataset:
